@@ -147,6 +147,13 @@ static const uint16_t airspyhf_usb_pid = 0x800C;
 
 static int airspyhf_config_read(airspyhf_device_t* device, uint8_t *buffer, uint16_t length);
 
+static int fileDescriptor = FILE_DESCRIPTOR_UNUSED;
+
+void ADDCALL set_the_native_Descriptor(int fd)
+{
+	fileDescriptor = fd;
+}
+
 static int cancel_transfers(airspyhf_device_t* device)
 {
 	uint32_t transfer_index;
@@ -848,6 +855,66 @@ static void airspyhf_open_device_fd(airspyhf_device_t* device,
 	return;
 }
 
+#ifdef __ANDROID__
+static int airspyhf_list_device_fd(uint64_t *serials, int count)
+{
+	libusb_context *context;
+	libusb_device_handle *handle = NULL;
+	struct libusb_device_descriptor descriptor;
+	unsigned char serial_number[AIRSPYHF_SERIAL_SIZE + 1];
+	int result;
+	int output_count = 0;
+
+	if (serials && count <= 0)
+	{
+		return 0;
+	}
+
+	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY, NULL);
+	if (libusb_init(&context) != 0)
+	{
+		return AIRSPYHF_ERROR;
+	}
+
+	result = libusb_wrap_sys_device(context, (intptr_t)fileDescriptor, &handle);
+	if (result != 0 || handle == NULL)
+	{
+		libusb_exit(context);
+		return AIRSPYHF_ERROR;
+	}
+
+	result = libusb_get_device_descriptor(libusb_get_device(handle), &descriptor);
+	if (result == 0 && descriptor.idVendor == airspyhf_usb_vid &&
+		descriptor.idProduct == airspyhf_usb_pid && descriptor.iSerialNumber > 0)
+	{
+		result = libusb_get_string_descriptor_ascii(handle, descriptor.iSerialNumber,
+			serial_number, sizeof(serial_number));
+		if (result == AIRSPYHF_SERIAL_SIZE && !memcmp(str_prefix_serial_airspyhf,
+			serial_number, STR_PREFIX_SERIAL_AIRSPYHF_SIZE))
+		{
+			char *start, *end;
+			uint64_t serial;
+
+			serial_number[AIRSPYHF_SERIAL_SIZE] = 0;
+			start = (char*)(serial_number + STR_PREFIX_SERIAL_AIRSPYHF_SIZE);
+			serial = strtoull(start, &end, 16);
+			if (serial != 0 || start != end)
+			{
+				if (serials)
+				{
+					serials[0] = serial;
+				}
+				output_count = 1;
+			}
+		}
+	}
+
+	libusb_close(handle);
+	libusb_exit(context);
+	return output_count;
+}
+#endif
+
 int airspyhf_list_devices(uint64_t *serials, int count)
 {
 	libusb_device_handle* libusb_dev_handle;
@@ -868,6 +935,10 @@ int airspyhf_list_devices(uint64_t *serials, int count)
 	}
 
 #ifdef __ANDROID__
+	if (fileDescriptor != FILE_DESCRIPTOR_UNUSED)
+	{
+		return airspyhf_list_device_fd(serials, count);
+	}
 	// LibUSB does not support device discovery on android
 	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY, NULL);
 #endif
@@ -952,6 +1023,10 @@ static int airspyhf_open_init(airspyhf_device_t** device, uint64_t serial_number
 	}
 
 #ifdef __ANDROID__
+	if (fd == FILE_DESCRIPTOR_UNUSED)
+	{
+		fd = fileDescriptor;
+	}
 	// LibUSB does not support device discovery on android
 	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY, NULL);
 #endif
@@ -1284,7 +1359,7 @@ int ADDCALL airspyhf_set_samplerate(airspyhf_device_t* device, uint32_t samplera
 	return AIRSPYHF_SUCCESS;
 }
 
-int ADDCALL airspyhf_set_receiver_mode(airspyhf_device_t* device, receiver_mode_t value)
+static int ADDCALL airspyhf_set_receiver_mode(airspyhf_device_t* device, receiver_mode_t value)
 {
 	int result;
 	result = libusb_control_transfer(

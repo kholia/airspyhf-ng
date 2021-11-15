@@ -10,12 +10,12 @@ All rights reserved.
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 
 		Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-		Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the 
+		Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the
 		documentation and/or other materials provided with the distribution.
 		Neither the name of Airspy HF+ nor the names of its contributors may be used to endorse or promote products derived from this software
 		without specific prior written permission.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, 
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
 THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
 IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
 (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
@@ -37,7 +37,7 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 
 #if defined(_WIN32) && !defined(STATIC_AIRSPYHFPLUS)
 	 #define ADD_EXPORTS
-	 
+
 	/* You should define ADD_EXPORTS *only* when building the DLL. */
 	#ifdef ADD_EXPORTS
 		#define ADDAPI __declspec(dllexport)
@@ -168,6 +168,8 @@ extern ADDAPI int ADDCALL airspyhf_set_hf_agc(airspyhf_device_t* device, uint8_t
 extern ADDAPI int ADDCALL airspyhf_set_hf_agc_threshold(airspyhf_device_t* device, uint8_t flag);	/* when agc on: 0 = low, 1 = high */
 extern ADDAPI int ADDCALL airspyhf_set_hf_att(airspyhf_device_t* device, uint8_t att_index); /* Possible values: 0..8 Range: 0..48 dB Attenuation with 6 dB steps */
 extern ADDAPI int ADDCALL airspyhf_set_hf_lna(airspyhf_device_t* device, uint8_t flag);	/* 0 or 1: 1 to activate LNA (alias PreAmp): 1 = +6 dB gain - compensated in digital */
+
+extern ADDAPI void ADDCALL set_the_native_Descriptor(int fileDescriptor);
 
 #ifdef __cplusplus
 }
