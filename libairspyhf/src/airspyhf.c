@@ -79,14 +79,9 @@ static const char str_prefix_serial_airspyhf[STR_PREFIX_SERIAL_AIRSPYHF_SIZE] =
 
 #define LIBUSB_CTRL_TIMEOUT_MS (500)
 
-#pragma pack(push,1)
-
-typedef struct {
-	int16_t im;
-	int16_t re;
-} airspyhf_complex_int16_t;
-
-#pragma pack(pop)
+/* airspyhf_complex_int16_t now lives in the public header (same layout:
+ * two int16 components, no padding, identical to the old packed local
+ * typedef that used to sit here). */
 
 typedef struct airspyhf_device
 {
@@ -115,6 +110,7 @@ typedef struct airspyhf_device
 	volatile uint32_t frontend_options;
 	volatile float optimal_point;
 	uint8_t enable_dsp;
+	uint8_t sample_type;
 	uint8_t is_low_if;
 	float filter_gain;
 	airspyhf_complex_float_t vec;
@@ -329,6 +325,31 @@ static void convert_samples(airspyhf_device_t* device, airspyhf_complex_int16_t 
 	airspyhf_complex_float_t rot;
 	double angle;
 	float conversion_gain;
+
+	if (device->sample_type == AIRSPYHF_SAMPLE_INT16_IQ)
+	{
+		/* Raw int16 path (implements airspy/airspyhf#4): deliver the
+		 * device's own int16 samples with only the firmware filter gain
+		 * applied, in Q15 fixed point. No float conversion, no IQ
+		 * balance, no fine tuning - the consumer's DSP owns those. */
+		airspyhf_complex_int16_t *dest16 = (airspyhf_complex_int16_t *) dest;
+		int32_t gain_q15 = (int32_t) (device->filter_gain * 32768.0f + 0.5f);
+
+		if (gain_q15 >= 32767)
+		{
+			memcpy(dest16, src, count * sizeof(airspyhf_complex_int16_t));
+		}
+		else
+		{
+			for (i = 0; i < count; i++)
+			{
+				dest16[i].re = (int16_t) (((int32_t) src[i].re * gain_q15 + 16384) >> 15);
+				dest16[i].im = (int16_t) (((int32_t) src[i].im * gain_q15 + 16384) >> 15);
+			}
+		}
+
+		return;
+	}
 
 	conversion_gain = scale * device->filter_gain;
 
@@ -1150,6 +1171,7 @@ static int airspyhf_open_init(airspyhf_device_t** device, uint64_t serial_number
 	lib_device->optimal_point = 0.0f;
 	lib_device->filter_gain = 1.0f;
 	lib_device->enable_dsp = 1;
+	lib_device->sample_type = AIRSPYHF_SAMPLE_FLOAT32_IQ;
 
 	if (airspyhf_config_read(lib_device, (uint8_t *) &config, sizeof(config)) == AIRSPYHF_SUCCESS)
 	{
@@ -1185,6 +1207,54 @@ void ADDCALL airspyhf_lib_version(airspyhf_lib_version_t* lib_version)
 	lib_version->major_version = AIRSPYHF_VER_MAJOR;
 	lib_version->minor_version = AIRSPYHF_VER_MINOR;
 	lib_version->revision = AIRSPYHF_VER_REVISION;
+}
+
+int ADDCALL airspyhf_set_sample_type(airspyhf_device_t* device, const airspyhf_sample_type_t sample_type)
+{
+	airspyhf_complex_float_t *new_buffer;
+	size_t bytes;
+
+	if (sample_type != AIRSPYHF_SAMPLE_FLOAT32_IQ &&
+		sample_type != AIRSPYHF_SAMPLE_INT16_IQ)
+	{
+		return AIRSPYHF_ERROR;
+	}
+
+	if (device->streaming || device->stop_requested)
+	{
+		return AIRSPYHF_ERROR;
+	}
+
+	if (device->sample_type == sample_type)
+	{
+		return AIRSPYHF_SUCCESS;
+	}
+
+	/* Format-dependent buffer allocation (issue airspy/airspyhf#4):
+	 * float needs 4 bytes per component, int16 needs 2. */
+	if (sample_type == AIRSPYHF_SAMPLE_INT16_IQ)
+		bytes = device->buffer_size;
+	else
+		bytes = (device->buffer_size / sizeof(airspyhf_complex_int16_t)) * sizeof(airspyhf_complex_float_t);
+
+	new_buffer = (airspyhf_complex_float_t *) malloc(bytes);
+	if (new_buffer == NULL)
+	{
+		return AIRSPYHF_ERROR;
+	}
+
+	free(device->output_buffer);
+	device->output_buffer = new_buffer;
+	device->sample_type = sample_type;
+
+	/* In int16 mode the consumer's DSP owns fine tuning, so do not
+	 * offset the LO - it would need the float-only rotation to undo. */
+	if (device->freq_hz != 0)
+	{
+		airspyhf_set_freq_double(device, device->freq_hz);
+	}
+
+	return AIRSPYHF_SUCCESS;
 }
 
 int ADDCALL airspyhf_open_sn(airspyhf_device_t** device, uint64_t serial_number)
@@ -1441,7 +1511,11 @@ int ADDCALL airspyhf_set_freq_double(airspyhf_device_t* device, const double fre
 {
 	int result;
 	uint8_t buf[4];
-	double if_shift = (device->enable_dsp && !device->is_low_if) ? DEFAULT_IF_SHIFT : 0;
+	/* Zero-IF float mode deliberately offsets the LO and undoes it with
+	 * the fine-tuning rotation. The raw int16 path skips that rotation,
+	 * so it also skips the offset (issue airspy/airspyhf#4). */
+	double if_shift = (device->enable_dsp && !device->is_low_if &&
+		device->sample_type == AIRSPYHF_SAMPLE_FLOAT32_IQ) ? DEFAULT_IF_SHIFT : 0;
 	double adjusted_freq_hz = freq_hz * (1.0e9 + device->calibration_ppb) * 1.0e-9;
 	uint32_t lo_low_khz = device->is_low_if ? MIN_LOW_IF_LO : MIN_ZERO_IF_LO;
 	uint32_t freq_khz = MAX(lo_low_khz, (uint32_t)round((adjusted_freq_hz + if_shift) * 1e-3));

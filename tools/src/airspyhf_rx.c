@@ -178,6 +178,10 @@ bool receive = false;
 bool receive_wav = false;
 bool limit_num_samples = false;
 uint64_t samples_to_xfer = 0;
+
+/* issue airspy/airspyhf#4: raw int16 delivery */
+airspyhf_sample_type_t sample_type = AIRSPYHF_SAMPLE_FLOAT32_IQ;
+uint32_t bytes_per_iq_component = 4;
 uint64_t bytes_to_xfer = 0;
 
 struct timeval time_start;
@@ -307,8 +311,8 @@ int rx_callback(airspyhf_transfer_t* transfer)
 	float time_difference, rate;
 
 	if( fd ) {
-		// #sample * float size * I+Q
-		bytes_to_write = transfer->sample_count * 4 * 2;
+		// #sample * component size (4 bytes float32 or 2 bytes int16) * I+Q
+		bytes_to_write = transfer->sample_count * bytes_per_iq_component * 2;
 		pt_rx_buffer = transfer->samples;
 
 		gettimeofday(&time_now, NULL);
@@ -385,6 +389,9 @@ static void usage(void)
 	"\t-z\t\t\tDo not attempt to use manual AGC/LNA commands\n"
 	"\t\t\t\t(useful in order to avoid errors with old firmware)\n"
 
+	"\t-y float32|int16\tSample format written to the file (default float32)\n"
+	"\t\t\t\tint16 = raw device samples, no lib DSP (libairspyhf#4)\n"
+
 	);
 }
 
@@ -440,7 +447,7 @@ int main(int argc, char** argv)
 
 	bool do_not_use_manual_commands = false;
 
-	while( (opt = getopt(argc, argv, "r:ws:f:a:n:g:l:t:m:dhz")) != EOF )
+	while( (opt = getopt(argc, argv, "r:ws:f:a:n:g:l:t:m:y:dhz")) != EOF )
 	{
 		result = AIRSPYHF_SUCCESS;
 		switch( opt )
@@ -502,6 +509,19 @@ int main(int argc, char** argv)
 				if (strcmp(optarg, "on") == 0) hf_lna = true;
 			break;
 
+			case 'y':
+				if (strcmp(optarg, "int16") == 0) {
+					sample_type = AIRSPYHF_SAMPLE_INT16_IQ;
+					bytes_per_iq_component = 2;
+				} else if (strcmp(optarg, "float32") == 0) {
+					sample_type = AIRSPYHF_SAMPLE_FLOAT32_IQ;
+					bytes_per_iq_component = 4;
+				} else {
+					fprintf(stderr, "unknown sample format '%s' (float32|int16)\n", optarg);
+					goto exit_usage;
+				}
+			break;
+
 			case 'd':
 				verbose = true;
 			break;
@@ -526,7 +546,7 @@ int main(int argc, char** argv)
 
 	if (sample_rate) sample_rate_val = sample_rate_u32;
 
-	bytes_to_xfer = samples_to_xfer * (32 * 2 / 8);  // 32 bits per sample / 2 channels (I+Q) / 8 bits per byte
+	bytes_to_xfer = samples_to_xfer * (bytes_per_iq_component * 2);  // component bytes * 2 channels (I+Q)
 
 	if (samples_to_xfer >= SAMPLES_TO_XFER_MAX_U64) {
 		fprintf(stderr, "argument error: num_samples must be less than %s/%sMio\n",
@@ -603,6 +623,16 @@ int main(int argc, char** argv)
 			fprintf(stderr, "airspyhf_open() failed\n");
 			goto exit_failure;
 		}
+	}
+
+	// set the sample format before anything else configures tuning/DSP
+	if (sample_type != AIRSPYHF_SAMPLE_FLOAT32_IQ) {
+		if (airspyhf_set_sample_type(device, sample_type) != AIRSPYHF_SUCCESS) {
+			fprintf(stderr, "airspyhf_set_sample_type() failed\n");
+			goto exit_failure;
+		}
+		if (verbose)
+			fprintf(stderr, "Sample format: int16 (raw, no lib DSP)\n");
 	}
 
 	// check sample rates
@@ -793,12 +823,12 @@ int main(int argc, char** argv)
 			/* Wav Header */
 			wave_file_hdr.hdr.size = file_pos - 8;
 			/* Wav Format Chunk */
-			wave_file_hdr.fmt_chunk.wFormatTag = 3;  // 3=Float32
+			wave_file_hdr.fmt_chunk.wFormatTag = (sample_type == AIRSPYHF_SAMPLE_INT16_IQ) ? 1 : 3;  // 1=PCM16, 3=Float32
 			wave_file_hdr.fmt_chunk.wChannels = 2;   // I + Q
 			wave_file_hdr.fmt_chunk.dwSamplesPerSec = wav_sample_per_sec;
-			wave_file_hdr.fmt_chunk.dwAvgBytesPerSec = wave_file_hdr.fmt_chunk.dwSamplesPerSec * 4;
-			wave_file_hdr.fmt_chunk.wBlockAlign = 2 * (32 / 8);
-			wave_file_hdr.fmt_chunk.wBitsPerSample = 32;
+			wave_file_hdr.fmt_chunk.dwAvgBytesPerSec = wave_file_hdr.fmt_chunk.dwSamplesPerSec * bytes_per_iq_component * 2;
+			wave_file_hdr.fmt_chunk.wBlockAlign = 2 * bytes_per_iq_component;
+			wave_file_hdr.fmt_chunk.wBitsPerSample = bytes_per_iq_component * 8;
 			/* Wav Data Chunk */
 			wave_file_hdr.data_chunk.chunkSize = file_pos - sizeof(t_wav_file_hdr);
 			/* Overwrite header with updated data */

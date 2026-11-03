@@ -28,10 +28,10 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 
 #include <stdint.h>
 
-#define AIRSPYHF_VERSION "1.8.1"
+#define AIRSPYHF_VERSION "1.9.0"
 #define AIRSPYHF_VER_MAJOR 1
-#define AIRSPYHF_VER_MINOR 8
-#define AIRSPYHF_VER_REVISION 1
+#define AIRSPYHF_VER_MINOR 9
+#define AIRSPYHF_VER_REVISION 0
 
 #define AIRSPYHF_ENDPOINT_IN (1)
 
@@ -73,6 +73,20 @@ typedef struct {
 	float im;
 } airspyhf_complex_float_t;
 
+/* Interleaved int16 IQ, exactly as delivered by the device on the USB
+ * wire (field order matches the float path: im first, then re).
+ * See airspyhf_set_sample_type(). */
+typedef struct {
+	int16_t im;
+	int16_t re;
+} airspyhf_complex_int16_t;
+
+typedef enum
+{
+	AIRSPYHF_SAMPLE_FLOAT32_IQ = 0,	/* default: interleaved float32 IQ with lib DSP applied */
+	AIRSPYHF_SAMPLE_INT16_IQ = 1,	/* raw device path: interleaved int16 IQ, no lib DSP */
+} airspyhf_sample_type_t;
+
 typedef struct {
 	uint32_t part_id;
 	uint32_t serial_no[4];
@@ -92,7 +106,11 @@ typedef struct airspyhf_device airspyhf_device_t;
 typedef struct {
 	airspyhf_device_t* device;
 	void* ctx;
-	airspyhf_complex_float_t* samples;
+	union	/* valid member depends on airspyhf_set_sample_type() */
+	{
+		airspyhf_complex_float_t* samples;	/* AIRSPYHF_SAMPLE_FLOAT32_IQ (default) */
+		airspyhf_complex_int16_t* samples_i16;	/* AIRSPYHF_SAMPLE_INT16_IQ */
+	};
 	int sample_count;
 	uint64_t dropped_samples;
 } airspyhf_transfer_t;
@@ -123,6 +141,7 @@ extern ADDAPI int ADDCALL airspyhf_start(airspyhf_device_t* device, airspyhf_sam
 extern ADDAPI int ADDCALL airspyhf_stop(airspyhf_device_t* device);
 extern ADDAPI int ADDCALL airspyhf_is_streaming(airspyhf_device_t* device);
 extern ADDAPI int ADDCALL airspyhf_is_low_if(airspyhf_device_t* device); /* Tells if the current sample rate is Zero-IF (0) or Low-IF (1) */
+extern ADDAPI int ADDCALL airspyhf_set_sample_type(airspyhf_device_t* device, const airspyhf_sample_type_t sample_type); /* Selects the callback sample format (see enum airspyhf_sample_type). Streaming must be stopped. */
 extern ADDAPI int ADDCALL airspyhf_set_freq(airspyhf_device_t* device, const uint32_t freq_hz);
 extern ADDAPI int ADDCALL airspyhf_set_freq_double(airspyhf_device_t* device, const double freq_hz);
 extern ADDAPI int ADDCALL airspyhf_set_lib_dsp(airspyhf_device_t* device, const uint8_t flag); /* Enables/Disables the IQ Correction, IF shift and Fine Tuning. */
